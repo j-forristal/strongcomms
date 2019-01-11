@@ -40,7 +40,7 @@ var (
 	DefaultMinimumDOHCacheTime = 5 * time.Minute
 	DefaultCacheSize           = 32
 
-	DefaultNetworkTestHostnames = []string{"dns.google.com"}
+	DefaultNetworkTestHostnames = []string{"dns.google.com", "cloudflare-dns.com"}
 
 	DefaultTLSMinVersion    = uint16(tls.VersionTLS12)
 	DefaultCurvePreferences = []tls.CurveID{
