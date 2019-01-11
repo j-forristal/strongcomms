@@ -110,6 +110,21 @@ func TestHTTPSClientGoogleDefault(t *testing.T) {
 
 }
 
+func TestNetworkTest(t *testing.T) {
+	cfg := Config{
+		UseCloudflareDOH: true,
+		UseGoogleDOH:     true,
+	}
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !client.TestNetwork() {
+		t.Error("Network test failed")
+	}
+}
+
 func TestGetTimeCurrent(t *testing.T) {
 	cfg := Config{
 		UseCloudflareDOH: true,

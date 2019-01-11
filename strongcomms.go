@@ -40,6 +40,8 @@ var (
 	DefaultMinimumDOHCacheTime = 5 * time.Minute
 	DefaultCacheSize           = 32
 
+	DefaultNetworkTestHostnames = []string{"dns.google.com"}
+
 	DefaultTLSMinVersion    = uint16(tls.VersionTLS12)
 	DefaultCurvePreferences = []tls.CurveID{
 		tls.CurveP521,
@@ -62,6 +64,7 @@ type Client struct {
 	DOHServers                []*DOHServer
 	ClientHTTPS               *http.Client
 	HTTPSPins                 [][]byte
+	NetworkTestHostnames      []string
 	TLSErrorCallback          func(source, errorType string, cert *x509.Certificate)
 	DateCallback              func(t time.Time)
 	CountDOHCacheHits         uint32
@@ -149,6 +152,7 @@ func New(cfg Config) (*Client, error) {
 					if strings.HasPrefix(network, "tcp") {
 						network = "tcp4"
 					}
+					// NOTE: net.DialTimeout will use normal DNS to resolve DOH server hostnames:
 					return net.DialTimeout(network, doh.Dial, doh.Timeout)
 				},
 			},
@@ -167,7 +171,8 @@ func New(cfg Config) (*Client, error) {
 			},
 		},
 
-		cache: lru.New(DefaultCacheSize),
+		NetworkTestHostnames: DefaultNetworkTestHostnames,
+		cache:                lru.New(DefaultCacheSize),
 	}
 
 	// Due to closure references, we now create a closure that references the prior created Client
@@ -335,6 +340,23 @@ func makePinnedDialer(s *Client, cfg *Config) (Dialer, error) {
 		// Matched, pass through the connection
 		return c, nil
 	}, nil
+}
+
+// Utility function to 'test' the network using the NetworkTestHostnames. Currently
+// 'test' means to do a simple (traditional) DNS lookup, which is a good sign
+// things are generally working -- but those DNS lookups must not be privacy
+// revealing (so, choose NetworkTestHostnames carefully!).
+func (s *Client) TestNetwork() bool {
+
+	for _, hostname := range s.NetworkTestHostnames {
+		if addrs, err := net.LookupHost(hostname); err == nil && len(addrs) > 0 {
+			// A lookup succeeded; call that good
+			return true
+		}
+	}
+
+	// Nothing resolved
+	return false
 }
 
 // Lookup up IP addresses (A records/IPv4) for the given hostname.  Meant to be
