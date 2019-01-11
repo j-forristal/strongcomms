@@ -343,6 +343,16 @@ func (s *Client) LookupIP(hostname string) ([]net.IP, error) {
 	var err error
 	var body []byte
 
+	// BUGFIX: if hostname is already an IP address, just return it:
+	var ip net.IP
+	if ip = net.ParseIP(hostname); ip != nil {
+		ip = ip.To4()
+		if ip != nil {
+			return []net.IP{ip}, nil
+		}
+		return nil, errors.New("IPv6 not supported")
+	}
+
 	// Make sure hostname is normalized and ends with trailing period
 	// NOTE: hostname serves as our cache key
 	hostname = strings.ToLower(hostname)
