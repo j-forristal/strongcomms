@@ -7,6 +7,7 @@ package strongcomms
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -16,6 +17,34 @@ const (
 	DNSTestHostname = "strongcomms-test.forristal.com"
 	DNSTestAnswer   = "1.2.3.4"
 )
+
+func TestStaticLookup(t *testing.T) {
+	cfg := Config{
+		UseGoogleDOH:     true,
+		UseCloudflareDOH: true,
+	}
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testIP := net.ParseIP("9.10.11.12")
+	client.SetCache(DNSTestHostname, []net.IP{testIP})
+	ips, err := client.LookupIP(DNSTestHostname)
+	if err != nil {
+		t.Error(err)
+	} else {
+		if len(ips) > 0 {
+			if ips[0].Equal(testIP) {
+				// Success
+			} else {
+				t.Error(fmt.Sprintf("Unexpected IP answer %v\n", ips[0].String()))
+			}
+		} else {
+			t.Error("Expected IP answer not found")
+		}
+	}
+}
 
 func TestDOHGoogle(t *testing.T) {
 	cfg := Config{

@@ -366,6 +366,26 @@ func makePinnedDialer(s *Client, cfg *Config) (Dialer, error) {
 	}, nil
 }
 
+// Override the resolution for the given hostname. This will create a non-expiring
+// cache entry for the give hostname. If the list of IPs is empty/nil, then the
+// existing cache entry (static or otherwise) will be removed.
+func (s *Client) SetCache(hostname string, ips []net.IP) {
+	// Make sure hostname is normalized and ends with trailing period
+	hostname = strings.ToLower(hostname)
+	if !strings.HasSuffix(hostname, ".") {
+		hostname += "."
+	}
+
+	if len(ips) > 0 {
+		s.cache.Add(hostname, &dohCacheEntry{
+			ips:     ips,
+			timeout: time.Now().Add(10 * time.Hour * 24 * 365), // 10 years
+		})
+	} else {
+		s.cache.Remove(hostname)
+	}
+}
+
 // Utility function to 'test' the network using the NetworkTestHostnames. Currently
 // 'test' means to do a simple (traditional) DNS lookup, which is a good sign
 // things are generally working -- but those DNS lookups must not be privacy
