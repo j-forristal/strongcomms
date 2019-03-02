@@ -41,9 +41,12 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"fmt"
 
 	"github.com/j-forristal/strongcomms/lru"
 	"golang.org/x/net/dns/dnsmessage"
@@ -81,6 +84,8 @@ var (
 		tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
 		tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
 	}
+
+	Trace = false
 )
 
 type Client struct {
@@ -110,21 +115,87 @@ type DOHServer struct {
 type CertValidationType int
 
 const (
+	// CertValidationDefault will use standard root certificate parsing against the
+	// system default root certificate store
 	CertValidationDefault CertValidationType = iota
+
+	// CertValidationDisable will disable all certificate validation.  USE WITH CAUTION.
 	CertValidationDisable
+
+	// CertValidateSPKIPinAnyDefault will use standard root certificate parsing against
+	// the system default root certificate store; upon successful validation, the successful
+	// cert chain will be further scanned and require at least one SPKI pin (specified in
+	// CertValidationPins) be present in the chain.
 	CertValidateSPKIPinAnyDefault
+
+	// CertValidateSPKIPinFirst will check the first (leaf) certificate of the site
+	// uses an SPKI specified in CertValidationPins.  Since the leaf certificate is
+	// explicitly checked, full certificate chain validation is not performed. This is
+	// only useful for self-signed certificate usages, where you expect a specific
+	// single certificate to be presented by the site.
 	CertValidateSPKIPinFirst
+
+	// CertValidationCloudfront uses a limited root CAs certificate store particular to
+	// the root CAs used for Cloudfront sites. Only use this method if you are
+	// exclusively accessing Cloudfront-fronted websites.
 	CertValidationCloudfront
 )
 
+// Configuration of Strongcomms client
 type Config struct {
-	UseCloudflareDOH   bool
-	UseGoogleDOH       bool
-	TimeoutDOH         time.Duration
-	TimeoutHTTPSTotal  time.Duration
-	TimeoutHTTPSSetup  time.Duration
+	// UseCloudflareDOH, when true, will configure default Cloudflare DOH support
+	UseCloudflareDOH bool
+
+	// UseGoogleDOH, when true, will configure default Google DOH support
+	UseGoogleDOH bool
+
+	// TimeoutDOH controls DOH lookup timeout; if not set, DefaultTimeoutDOH will be used
+	TimeoutDOH time.Duration
+
+	// TimeoutHTTPSTotal controls total HTTPS request timeout; if not set,
+	// DefaultTimeoutHTTPSTotal will be used
+	TimeoutHTTPSTotal time.Duration
+
+	// TimeoutHTTPSSetup controls setup/request phase HTTPS timeout; if not set,
+	// DefaultTimeoutHTTPSSetup will be used
+	TimeoutHTTPSSetup time.Duration
+
+	// CertValidationType indicates the type of certificate validation to perform for
+	// HTTPS requests
 	CertValidationType CertValidationType
+
+	// CertValidationPins specifies one or more SPKI hashes (SHA256), when using
+	// CertValidateSPKIPinAnyDefault or CertValidateSPKIPinFirst CertValidationType types.
 	CertValidationPins [][]byte
+
+	// ProxyConfig specifies an optional HTTP/HTTPS proxy configuration. The default nil
+	// value will use the system standard http.ProxyFromEnvironment().  To explicitly
+	// disable all proxies (i.e. override the environment values), create a ProxyConfig
+	// with an empty ProxyUrl value.
+	//
+	// Special note: certificate validation of HTTPS proxies is shared with the
+	// validation configuration for HTTPS websites. Please see LIMITATIONS documentation
+	// regarding configuration nuances and conflicting settings for proxy HTTPS and website
+	// HTTPS certificate validation.
+	ProxyConfig *ProxyConfig
+}
+
+// Proxy configuration of Strongcomms client
+type ProxyConfig struct {
+	// ProxyUrl should specify a proxy address value that is compatible to the format
+	// documented in http.ProxyFromEnvironment(). Setting an empty string value is
+	// the equivalent to explicitly disabling all proxy support (including ignoring
+	// any values set in the environment).
+	Url string
+
+	// ProxyCertsPEM, if not empty, can contain one or more PEM-encoded certificates. The
+	// PEM-encoded certificates will be decoded and added into the TLS certificate pools.
+	//
+	// Special note: certificate validation of HTTPS proxies is shared with the
+	// validation configuration for HTTPS websites. Please see LIMITATIONS documentation
+	// regarding configuration nuances and conflicting settings for proxy HTTPS and website
+	// HTTPS certificate validation.
+	CertsPEM []byte
 }
 
 type dohCacheEntry struct {
@@ -146,12 +217,39 @@ func New(cfg Config) (*Client, error) {
 		cfg.TimeoutHTTPSSetup = DefaultTimeoutHTTPSSetup
 	}
 
+	// Create our default DOH cert pool
 	dohCertPool := x509.NewCertPool()
 	if !dohCertPool.AppendCertsFromPEM(CertsDOH) {
 		return nil, errors.New("Unable to load DOH certs")
 	}
 
+	// SPECIAL: if custom HTTPS proxy certs are being used, we need to add them to
+	// the DOH cert pool too, so DOH looks work through the proxy.
+	if cfg.ProxyConfig != nil && cfg.ProxyConfig.Url != "" && len(cfg.ProxyConfig.CertsPEM) > 0 {
+		if !dohCertPool.AppendCertsFromPEM(cfg.ProxyConfig.CertsPEM) {
+			return nil, errors.New("Unable to load proxy certs into DOH cert pool")
+		}
+	}
+
+	// Resolve what proxy we are going to use
+	proxy := http.ProxyFromEnvironment
+	if cfg.ProxyConfig != nil {
+
+		if cfg.ProxyConfig.Url == "" { // Empty string explicitly means no proxy
+			proxy = nil
+
+		} else { // Explicitly set the proxy
+			url, err := url.Parse(cfg.ProxyConfig.Url)
+			if err != nil {
+				return nil, errors.New("Unable to parse proxy URL: " + err.Error())
+			}
+			proxy = http.ProxyURL(url)
+		}
+	}
+
 	c := &Client{
+
+		// The HTTP client used for DOH requests:
 		ClientDOH: &http.Client{
 			Timeout: cfg.TimeoutDOH,
 			Transport: &http.Transport{
@@ -160,7 +258,7 @@ func New(cfg Config) (*Client, error) {
 				DisableCompression:    false,
 				TLSHandshakeTimeout:   cfg.TimeoutDOH,
 				ResponseHeaderTimeout: cfg.TimeoutDOH,
-				Proxy: http.ProxyFromEnvironment,
+				Proxy: proxy,
 				TLSClientConfig: &tls.Config{
 					MinVersion:         DefaultTLSMinVersion,
 					CurvePreferences:   DefaultCurvePreferences,
@@ -173,15 +271,28 @@ func New(cfg Config) (*Client, error) {
 					if !ok {
 						return nil, errors.New("No DOH context")
 					}
+
+					// Specifically switch the lookup to IPv4:
 					if strings.HasPrefix(network, "tcp") {
 						network = "tcp4"
 					}
+
+					// If we are using a proxy, we need to dial the proxy, not the DOH server
+					dialAddr := doh.Dial
+					if proxy != nil && urlIsProxied(proxy, doh.Url) { //  NOTE: proxy is a closure variable
+						dialAddr = addr
+					}
+
 					// NOTE: net.DialTimeout will use normal DNS to resolve DOH server hostnames:
-					return net.DialTimeout(network, doh.Dial, doh.Timeout)
+					if Trace {
+						fmt.Printf("DOH Dial %s:%s\n", network, dialAddr)
+					}
+					return net.DialTimeout(network, dialAddr, doh.Timeout)
 				},
 			},
 		},
 
+		// The HTTP client used for normal website requests
 		ClientHTTPS: &http.Client{
 			Timeout: cfg.TimeoutHTTPSTotal,
 			Transport: &http.Transport{
@@ -190,8 +301,9 @@ func New(cfg Config) (*Client, error) {
 				DisableCompression:    false,
 				TLSHandshakeTimeout:   cfg.TimeoutHTTPSSetup,
 				ResponseHeaderTimeout: cfg.TimeoutHTTPSSetup,
-				Proxy: http.ProxyFromEnvironment,
-				// NOTE: DialContext set below, in closure
+				Proxy: proxy,
+				// NOTE: TLSClientConfig set below
+				// NOTE: DialContext set below
 			},
 		},
 
@@ -199,31 +311,59 @@ func New(cfg Config) (*Client, error) {
 		cache:                lru.New(DefaultCacheSize),
 	}
 
+	// SPECIAL NOTE: We are going to install a custom Dialer, which uses our DOH client for DNS lookups
+	// rather than the normal system-based DNS lookup. But it is worth explaining how things work when
+	// a proxy is involved:
+	// - When no proxy, dial will be for website hostname, thus DOH will look up website address
+	// - When proxy is used, dial will be for proxy hostname (DOH will be used to look up proxy address),
+	//   and then website name is provided to the proxy for the proxy to resolve however it choosed.
+	// In other words, using a proxy effectively gives the proxy control of the DNS lookup, and likely
+	// it is not using DOH. See LIMITATIONS document.
+
 	// Due to closure references, we now create a closure that references the prior created Client
 	var tr *http.Transport = c.ClientHTTPS.Transport.(*http.Transport)
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+
+		// We need to parse the hostname in order to perform a DOH lookup (rather than
+		// the normal system-based DNS lookup)
+
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, err
 		}
-		var ip net.IP
-		if ip = net.ParseIP(host); ip != nil {
-			return net.DialTimeout(network, addr, cfg.TimeoutHTTPSSetup)
-		}
+
+		// Specifically switch the lookup to IPv4:
 		if strings.HasPrefix(network, "tcp") {
 			network = "tcp4"
 		}
 
-		var conn net.Conn
+		// If the host is an IP address, we do not need a DOH lookup -- just go direct
+		var ip net.IP
+		if ip = net.ParseIP(host); ip != nil {
+			if Trace {
+				fmt.Printf("Client Dial %s:%s\n", network, addr)
+			}
+			return net.DialTimeout(network, addr, cfg.TimeoutHTTPSSetup)
+		}
+
+		// Look up (IPv4) IP addresses via DOH
 		ips, err := c.LookupIP(host) // Our own DOH lookup
 		if err != nil {
 			return nil, err
 		}
+
+		// Sequentially try each returned IP address, until we get a valid connection
+		var conn net.Conn
 		for _, ip = range ips {
 			if ip.To4() == nil {
 				continue
 			}
-			conn, err = net.DialTimeout(network, net.JoinHostPort(ip.String(), port), cfg.TimeoutHTTPSSetup)
+
+			addr := net.JoinHostPort(ip.String(), port)
+			if Trace {
+				fmt.Printf("Client Dial %s:%s\n", network, addr)
+			}
+			conn, err = net.DialTimeout(network, addr, cfg.TimeoutHTTPSSetup)
 			if err == nil {
 				return conn, err
 			}
@@ -237,6 +377,10 @@ func New(cfg Config) (*Client, error) {
 		return nil, errors.New("Unable to dial/connect")
 	}
 
+	// Now we need to configure our TLS client values.
+	// NOTE: keep in mind these values are shared between HTTPS website validation and
+	// HTTPS proxy connection!
+
 	var err error
 	tr.TLSClientConfig = &tls.Config{
 		ClientSessionCache: tls.NewLRUClientSessionCache(0),
@@ -245,21 +389,31 @@ func New(cfg Config) (*Client, error) {
 		CipherSuites:       DefaultCipherSuites,
 	}
 
+	usingSystemCertPool := false
+
 	switch cfg.CertValidationType {
 	case CertValidationDefault:
-		// Nothing else to do, use system root CA certs // Fallthrough
+		// Go uses system cert pool be default.
+		usingSystemCertPool = true
 
 	case CertValidationDisable:
+		// WARNING: this disabled cert validation for both websites and
+		// HTTPS proxy connections
 		tr.TLSClientConfig.InsecureSkipVerify = true
 
 	case CertValidateSPKIPinAnyDefault:
-		// Use system root CA certs
+		// Use system root CA certs, and then add PIN enforcement on top
+		// NOTE: HTTPS proxies need their pins added to the pin list
+		usingSystemCertPool = true
 		tr.DialTLS, err = makePinnedDialer(c, &cfg)
 		if err != nil {
 			return nil, err
 		}
 
 	case CertValidateSPKIPinFirst:
+		// Disable certificate verification, and then add PIN enforcement
+		// of the first (leaf) cert
+		// NOTE: HTTPS proxies need their pins added to the pin list
 		tr.TLSClientConfig.InsecureSkipVerify = true
 		tr.DialTLS, err = makePinnedDialer(c, &cfg)
 		if err != nil {
@@ -267,16 +421,37 @@ func New(cfg Config) (*Client, error) {
 		}
 
 	case CertValidationCloudfront:
+		// Use a custom RootCA pool having just Cloudfront certs
 		cloudfrontCertPool := x509.NewCertPool()
 		if !cloudfrontCertPool.AppendCertsFromPEM(CertsCloudfront) {
 			return nil, errors.New("Unable to load Cloudfront certs")
 		}
+
+		// SPECIAL: if custom HTTPS proxy certs are being used, we need to add them to
+		// the cloudfront cert pool too
+		if cfg.ProxyConfig != nil && cfg.ProxyConfig.Url != "" && len(cfg.ProxyConfig.CertsPEM) > 0 {
+			if !cloudfrontCertPool.AppendCertsFromPEM(cfg.ProxyConfig.CertsPEM) {
+				return nil, errors.New("Unable to load proxy certs into RootCA cert pool")
+			}
+		}
+
 		tr.TLSClientConfig.RootCAs = cloudfrontCertPool
 
 	default:
 		return nil, errors.New("Bad cert validation type")
 	}
 
+	if usingSystemCertPool {
+		// We don't have to do anything special if using system cert pool, unless we are using
+		// a proxy and need to append our custom certs to the pool.
+		if cfg.ProxyConfig != nil && cfg.ProxyConfig.Url != "" && len(cfg.ProxyConfig.CertsPEM) > 0 {
+			if err = AppendPEMCert(cfg.ProxyConfig.CertsPEM, c.ClientHTTPS); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Now add in pre-made DOH server configurations, if requested
 	if cfg.UseCloudflareDOH {
 		c.DOHServers = append(c.DOHServers, &DOHServer{
 			Timeout: cfg.TimeoutDOH,
@@ -298,6 +473,22 @@ func New(cfg Config) (*Client, error) {
 	}
 
 	return c, nil
+}
+
+func urlIsProxied(proxy func(*http.Request) (*url.URL, error), testUrl string) bool {
+
+	url, err := url.Parse(testUrl)
+	if err != nil {
+		return false
+	}
+
+	req := &http.Request{
+		Method: "GET",
+		URL:    url,
+	}
+
+	proxyUrl, _ := proxy(req)
+	return proxyUrl != nil
 }
 
 type Dialer func(network, addr string) (net.Conn, error)
@@ -334,18 +525,20 @@ func makePinnedDialer(s *Client, cfg *Config) (Dialer, error) {
 		for _, chain := range cs.VerifiedChains {
 			for _, cert := range chain {
 
-				// Hash the public SPKI
-				der, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+				hash, err := GetCertificatePin(cert)
 				if err != nil {
 					return c, err
 				}
-				hash := sha256.Sum256(der)
 
 				// Check each of our pins
 				for _, pin := range s.HTTPSPins {
-					if bytes.Equal(hash[:], pin) {
+					if bytes.Equal(hash, pin) {
 						pinned = true
 						goto done
+					}
+
+					if Trace {
+						fmt.Printf("TLS Pin %s: %v\n", cert.Subject, hash)
 					}
 				}
 				// If we matched, or we only wanted to check first cert, we are done
@@ -364,6 +557,47 @@ func makePinnedDialer(s *Client, cfg *Config) (Dialer, error) {
 		// Matched, pass through the connection
 		return c, nil
 	}, nil
+}
+
+// AppendPEMCert is a convenience function to add the provided PEM-encoded
+// certificate to the provided HTTP client's root CA certificate pool. It should
+// be used in conjuction with Client.ClientDOH and Client.ClientHTTPS.
+func AppendPEMCert(pem []byte, client *http.Client) error {
+	var tr *http.Transport = client.Transport.(*http.Transport)
+	if tr == nil {
+		return errors.New("HTTP transport required")
+	}
+	if tr.TLSClientConfig == nil {
+		return errors.New("An explicit TLSClientConfig is required")
+	}
+
+	// If the config is using the default system cert pool, we need to
+	// explicitly copy the pool in order to append
+	if tr.TLSClientConfig.RootCAs == nil {
+		tr.TLSClientConfig.RootCAs, _ = x509.SystemCertPool()
+	}
+	if tr.TLSClientConfig.RootCAs == nil {
+		tr.TLSClientConfig.RootCAs = x509.NewCertPool()
+	}
+
+	if !tr.TLSClientConfig.RootCAs.AppendCertsFromPEM(pem) {
+		return errors.New("Unable to load cert into RootCA cert pool")
+	}
+
+	return nil
+}
+
+// GetCertificatePin is a convenience function to provide a SHA256 hash of
+// a certificate's SPKI
+func GetCertificatePin(cert *x509.Certificate) ([]byte, error) {
+
+	// Hash the public SPKI
+	der, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256(der)
+	return hash[:], nil
 }
 
 // Override the resolution for the given hostname. This will create a non-expiring
@@ -393,6 +627,9 @@ func (s *Client) SetCache(hostname string, ips []net.IP) {
 func (s *Client) TestNetwork() bool {
 
 	for _, hostname := range s.NetworkTestHostnames {
+		if Trace {
+			fmt.Printf("TEST Legacy DNS lookup for %s\n", hostname)
+		}
 		if addrs, err := net.LookupHost(hostname); err == nil && len(addrs) > 0 {
 			// A lookup succeeded; call that good
 			return true

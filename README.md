@@ -1,4 +1,4 @@
-# strongcomms
+# Strongcomms
 Security-minded communications for Go.  Primary goal is to exclusively
 use HTTPS/TLS for everything, providing both security and privacy for
 common network needs (DNS, NTP, etc).
@@ -21,3 +21,4 @@ point where you can trust the date/time provided to you.
 
 The code is generally concurrency safe for use, but not for live changes
 to Client object while running concurrent to lookup/request operations.
+
