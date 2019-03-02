@@ -445,17 +445,9 @@ func New(cfg Config) (*Client, error) {
 		// We don't have to do anything special if using system cert pool, unless we are using
 		// a proxy and need to append our custom certs to the pool.
 		if cfg.ProxyConfig != nil && cfg.ProxyConfig.Url != "" && len(cfg.ProxyConfig.CertsPEM) > 0 {
-
-			rootCAs, _ := x509.SystemCertPool()
-			if rootCAs == nil {
-				rootCAs = x509.NewCertPool()
+			if err = AppendPEMCert(cfg.ProxyConfig.CertsPEM, c.ClientHTTPS); err != nil {
+				return nil, err
 			}
-
-			if !rootCAs.AppendCertsFromPEM(cfg.ProxyConfig.CertsPEM) {
-				return nil, errors.New("Unable to load proxy certs into RootCA cert pool")
-			}
-
-			tr.TLSClientConfig.RootCAs = rootCAs
 		}
 	}
 
@@ -567,6 +559,36 @@ func makePinnedDialer(s *Client, cfg *Config) (Dialer, error) {
 	}, nil
 }
 
+// AppendPEMCert is a convenience function to add the provided PEM-encoded
+// certificate to the provided HTTP client's root CA certificate pool. It should
+// be used in conjuction with Client.ClientDOH and Client.ClientHTTPS.
+func AppendPEMCert(pem []byte, client *http.Client) error {
+	var tr *http.Transport = client.Transport.(*http.Transport)
+	if tr == nil {
+		return errors.New("HTTP transport required")
+	}
+	if tr.TLSClientConfig == nil {
+		return errors.New("An explicit TLSClientConfig is required")
+	}
+
+	// If the config is using the default system cert pool, we need to
+	// explicitly copy the pool in order to append
+	if tr.TLSClientConfig.RootCAs == nil {
+		tr.TLSClientConfig.RootCAs, _ = x509.SystemCertPool()
+	}
+	if tr.TLSClientConfig.RootCAs == nil {
+		tr.TLSClientConfig.RootCAs = x509.NewCertPool()
+	}
+
+	if !tr.TLSClientConfig.RootCAs.AppendCertsFromPEM(pem) {
+		return errors.New("Unable to load cert into RootCA cert pool")
+	}
+
+	return nil
+}
+
+// GetCertificatePin is a convenience function to provide a SHA256 hash of
+// a certificate's SPKI
 func GetCertificatePin(cert *x509.Certificate) ([]byte, error) {
 
 	// Hash the public SPKI
