@@ -23,7 +23,6 @@ const (
 
 func runHTTPProxy() *http.Server {
 	proxy := goproxy.NewProxyHttpServer()
-	proxy.Verbose = Trace
 
 	srv := &http.Server{
 		Addr:    proxyAddressHTTP,
@@ -36,7 +35,6 @@ func runHTTPProxy() *http.Server {
 
 func runHTTPSProxy() *http.Server {
 	proxy := goproxy.NewProxyHttpServer()
-	proxy.Verbose = Trace
 
 	cert, err := tls.X509KeyPair([]byte(testServerCert), []byte(testServerKey))
 	if err != nil {
@@ -82,6 +80,7 @@ func TestDOHGoogleHTTPProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	commonClient(client)
 
 	testDOHCommon(t, client)
 }
@@ -98,6 +97,7 @@ func TestDOHCloudflareHTTPProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	commonClient(client)
 
 	testDOHCommon(t, client)
 }
@@ -115,6 +115,7 @@ func TestDOHGoogleHTTPSProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	commonClient(client)
 
 	testDOHCommon(t, client)
 }
@@ -132,6 +133,7 @@ func TestDOHCloudflareHTTPSProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	commonClient(client)
 
 	testDOHCommon(t, client)
 }

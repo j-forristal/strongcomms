@@ -82,6 +82,13 @@ var (
 	zeroPin = [32]byte{0}
 )
 
+func commonClient(s *Client) {
+
+	s.TraceCallback = func(msg string) {
+		fmt.Println(msg)
+	}
+}
+
 func TestStaticLookup(t *testing.T) {
 	cfg := Config{
 		UseGoogleDOH:     true,
@@ -91,6 +98,7 @@ func TestStaticLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	commonClient(client)
 
 	testIP := net.ParseIP("9.10.11.12")
 	client.SetCache(DNSTestHostname, []net.IP{testIP})
@@ -118,6 +126,7 @@ func TestDOHGoogle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	commonClient(client)
 
 	testDOHCommon(t, client)
 }
@@ -130,6 +139,7 @@ func TestDOHCloudflare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	commonClient(client)
 
 	testDOHCommon(t, client)
 }
@@ -142,6 +152,7 @@ func TestDOHCaching(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	commonClient(client)
 
 	var total uint32 = 8
 	for i := 0; i < int(total); i++ {
@@ -180,6 +191,7 @@ func testHTTPSClientGoogle(cfg Config, t *testing.T) *Client {
 	if err != nil {
 		t.Fatal(err)
 	}
+	commonClient(client)
 
 	req, err := http.NewRequest("GET", "https://www.google.com/", nil)
 	if err != nil {
@@ -250,6 +262,7 @@ func TestNetworkTest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	commonClient(client)
 
 	if !client.TestNetwork() {
 		t.Error("Network test failed")
@@ -265,6 +278,7 @@ func TestGetTimeCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	commonClient(client)
 
 	tm := time.Now()
 	tm2, err := client.GetTime(tm)
@@ -288,6 +302,7 @@ func TestGetTimeZero(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	commonClient(client)
 
 	var tm time.Time
 	tm2, err := client.GetTime(tm)

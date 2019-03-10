@@ -86,8 +86,6 @@ var (
 		tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
 		tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
 	}
-
-	Trace = false
 )
 
 type Client struct {
@@ -99,6 +97,7 @@ type Client struct {
 	TLSErrorCallback          func(source, errorType string, cert *x509.Certificate)
 	DOHErrorCallback          func(source, hostname string, err error)
 	DateCallback              func(t time.Time)
+	TraceCallback             func(traceMsg string)
 	CountDOHCacheHits         uint32
 	CountDOHRequests          uint32
 	CountDOHResponseErrors    uint32
@@ -250,69 +249,68 @@ func New(cfg Config) (*Client, error) {
 		}
 	}
 
-	c := &Client{
+	c := &Client{}
 
-		// The HTTP client used for DOH requests:
-		ClientDOH: &http.Client{
-			Timeout: cfg.TimeoutDOH,
-			Transport: &http.Transport{
-				MaxIdleConns:          1,
-				IdleConnTimeout:       cfg.TimeoutDOH,
-				DisableCompression:    false,
-				TLSHandshakeTimeout:   cfg.TimeoutDOH,
-				ResponseHeaderTimeout: cfg.TimeoutDOH,
-				Proxy: proxy,
-				TLSClientConfig: &tls.Config{
-					MinVersion:         DefaultTLSMinVersion,
-					CurvePreferences:   DefaultCurvePreferences,
-					CipherSuites:       DefaultCipherSuites,
-					RootCAs:            dohCertPool,
-					ClientSessionCache: tls.NewLRUClientSessionCache(2),
-				},
-				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					doh, ok := ctx.Value(contextKeyDOH).(*DOHServer)
-					if !ok {
-						return nil, errors.New("No DOH context")
-					}
+	// The HTTP client used for DOH requests:
+	c.ClientDOH = &http.Client{
+		Timeout: cfg.TimeoutDOH,
+		Transport: &http.Transport{
+			MaxIdleConns:          1,
+			IdleConnTimeout:       cfg.TimeoutDOH,
+			DisableCompression:    false,
+			TLSHandshakeTimeout:   cfg.TimeoutDOH,
+			ResponseHeaderTimeout: cfg.TimeoutDOH,
+			Proxy: proxy,
+			TLSClientConfig: &tls.Config{
+				MinVersion:         DefaultTLSMinVersion,
+				CurvePreferences:   DefaultCurvePreferences,
+				CipherSuites:       DefaultCipherSuites,
+				RootCAs:            dohCertPool,
+				ClientSessionCache: tls.NewLRUClientSessionCache(2),
+			},
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				doh, ok := ctx.Value(contextKeyDOH).(*DOHServer)
+				if !ok {
+					return nil, errors.New("No DOH context")
+				}
 
-					// Specifically switch the lookup to IPv4:
-					if strings.HasPrefix(network, "tcp") {
-						network = "tcp4"
-					}
+				// Specifically switch the lookup to IPv4:
+				if strings.HasPrefix(network, "tcp") {
+					network = "tcp4"
+				}
 
-					// If we are using a proxy, we need to dial the proxy, not the DOH server
-					dialAddr := doh.Dial
-					if proxy != nil && urlIsProxied(proxy, doh.Url) { //  NOTE: proxy is a closure variable
-						dialAddr = addr
-					}
+				// If we are using a proxy, we need to dial the proxy, not the DOH server
+				dialAddr := doh.Dial
+				if proxy != nil && urlIsProxied(proxy, doh.Url) { //  NOTE: proxy is a closure variable
+					dialAddr = addr
+				}
 
-					// NOTE: net.DialTimeout will use normal DNS to resolve DOH server hostnames:
-					if Trace {
-						fmt.Printf("%s Dial %s:%s\n", TagDOH, network, dialAddr)
-					}
-					return net.DialTimeout(network, dialAddr, doh.Timeout)
-				},
+				// NOTE: net.DialTimeout will use normal DNS to resolve DOH server hostnames:
+				if c.TraceCallback != nil {
+					c.TraceCallback(fmt.Sprintf("%s Dial %s:%s", TagDOH, network, dialAddr))
+				}
+				return net.DialTimeout(network, dialAddr, doh.Timeout)
 			},
 		},
-
-		// The HTTP client used for normal website requests
-		ClientHTTPS: &http.Client{
-			Timeout: cfg.TimeoutHTTPSTotal,
-			Transport: &http.Transport{
-				MaxIdleConns:          4,
-				IdleConnTimeout:       cfg.TimeoutHTTPSSetup,
-				DisableCompression:    false,
-				TLSHandshakeTimeout:   cfg.TimeoutHTTPSSetup,
-				ResponseHeaderTimeout: cfg.TimeoutHTTPSSetup,
-				Proxy: proxy,
-				// NOTE: TLSClientConfig set below
-				// NOTE: DialContext set below
-			},
-		},
-
-		NetworkTestHostnames: DefaultNetworkTestHostnames,
-		cache:                lru.New(DefaultCacheSize),
 	}
+
+	// The HTTP client used for normal website requests
+	c.ClientHTTPS = &http.Client{
+		Timeout: cfg.TimeoutHTTPSTotal,
+		Transport: &http.Transport{
+			MaxIdleConns:          4,
+			IdleConnTimeout:       cfg.TimeoutHTTPSSetup,
+			DisableCompression:    false,
+			TLSHandshakeTimeout:   cfg.TimeoutHTTPSSetup,
+			ResponseHeaderTimeout: cfg.TimeoutHTTPSSetup,
+			Proxy: proxy,
+			// NOTE: TLSClientConfig set below
+			// NOTE: DialContext set below
+		},
+	}
+
+	c.NetworkTestHostnames = DefaultNetworkTestHostnames
+	c.cache = lru.New(DefaultCacheSize)
 
 	// SPECIAL NOTE: We are going to install a custom Dialer, which uses our DOH client for DNS lookups
 	// rather than the normal system-based DNS lookup. But it is worth explaining how things work when
@@ -343,8 +341,8 @@ func New(cfg Config) (*Client, error) {
 		// If the host is an IP address, we do not need a DOH lookup -- just go direct
 		var ip net.IP
 		if ip = net.ParseIP(host); ip != nil {
-			if Trace {
-				fmt.Printf("%s Dial %s:%s\n", TagClient, network, addr)
+			if c.TraceCallback != nil {
+				c.TraceCallback(fmt.Sprintf("%s Dial %s:%s", TagClient, network, addr))
 			}
 			return net.DialTimeout(network, addr, cfg.TimeoutHTTPSSetup)
 		}
@@ -363,8 +361,8 @@ func New(cfg Config) (*Client, error) {
 			}
 
 			addr := net.JoinHostPort(ip.String(), port)
-			if Trace {
-				fmt.Printf("%s Dial %s:%s\n", TagClient, network, addr)
+			if c.TraceCallback != nil {
+				c.TraceCallback(fmt.Sprintf("%s Dial %s:%s", TagClient, network, addr))
 			}
 			conn, err = net.DialTimeout(network, addr, cfg.TimeoutHTTPSSetup)
 			if err == nil {
@@ -540,8 +538,8 @@ func makePinnedDialer(s *Client, cfg *Config) (Dialer, error) {
 						goto done
 					}
 
-					if Trace {
-						fmt.Printf("TLS Pin %s: %v\n", cert.Subject, hash)
+					if s.TraceCallback != nil {
+						s.TraceCallback(fmt.Sprintf("TLS Pin %s: %v", cert.Subject, hash))
 					}
 				}
 				// If we matched, or we only wanted to check first cert, we are done
@@ -630,8 +628,8 @@ func (s *Client) SetCache(hostname string, ips []net.IP) {
 func (s *Client) TestNetwork() bool {
 
 	for _, hostname := range s.NetworkTestHostnames {
-		if Trace {
-			fmt.Printf("%s Legacy DNS lookup for %s\n", TagNetworkTest, hostname)
+		if s.TraceCallback != nil {
+			s.TraceCallback(fmt.Sprintf("%s Legacy DNS lookup for %s", TagNetworkTest, hostname))
 		}
 		if addrs, err := net.LookupHost(hostname); err == nil && len(addrs) > 0 {
 			// A lookup succeeded; call that good
@@ -945,9 +943,8 @@ func (s *Client) getTimeSingle(tm time.Time, url string, roots *x509.CertPool) (
 		CipherSuites:     DefaultCipherSuites,
 		RootCAs:          roots,
 		Time: func() time.Time {
-			if Trace {
-				fmt.Printf("%s Using custom time:%v\n", TagNetworkTime, *tmPtr)
-
+			if s.TraceCallback != nil {
+				s.TraceCallback(fmt.Sprintf("%s Using custom time:%v", TagNetworkTime, *tmPtr))
 			}
 			return *tmPtr
 		},
@@ -987,8 +984,8 @@ func (s *Client) getTimeSingle(tm time.Time, url string, roots *x509.CertPool) (
 			// chain...but it may not be current.  Now use the Date header to
 			// find the actual current time.
 
-			if Trace {
-				fmt.Printf("%s Time usable for connection:%v\n", TagNetworkTime, *tmPtr)
+			if s.TraceCallback != nil {
+				s.TraceCallback(fmt.Sprintf("%s Time usable for connection:%v", TagNetworkTime, *tmPtr))
 			}
 
 			tm2 := parseDate(response.Header.Get("Date"))
@@ -996,8 +993,8 @@ func (s *Client) getTimeSingle(tm time.Time, url string, roots *x509.CertPool) (
 				return *tmPtr, errors.New("Response did not include usuable date")
 			}
 			tmPtr = &tm2
-			if Trace {
-				fmt.Printf("%s Time from server:%v\n", TagNetworkTime, *tmPtr)
+			if s.TraceCallback != nil {
+				s.TraceCallback(fmt.Sprintf("%s Time from server:%v", TagNetworkTime, *tmPtr))
 			}
 			break
 		}
@@ -1009,14 +1006,14 @@ func (s *Client) getTimeSingle(tm time.Time, url string, roots *x509.CertPool) (
 					tmPtr = &tmTmp
 					continue
 				}
-				if Trace {
-					fmt.Printf("%s Certificate expired error did not include cert\n", TagNetworkTime)
+				if s.TraceCallback != nil {
+					s.TraceCallback(fmt.Sprintf("%s Certificate expired error did not include cert", TagNetworkTime))
 				}
-			} else if Trace {
-				fmt.Printf("%s Certificate error other than expired: %v\n", TagNetworkTime, err.Error())
+			} else if s.TraceCallback != nil {
+				s.TraceCallback(fmt.Sprintf("%s Certificate error other than expired: %v", TagNetworkTime, err.Error()))
 			}
-		} else if Trace {
-			fmt.Printf("%s Non-certificate error: %v\n", TagNetworkTime, err.Error())
+		} else if s.TraceCallback != nil {
+			s.TraceCallback(fmt.Sprintf("%s Non-certificate error: %v", TagNetworkTime, err.Error()))
 		}
 
 		// Whatever error we got, we cannot recover -- so we are done
