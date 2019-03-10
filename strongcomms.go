@@ -59,6 +59,7 @@ const (
 	TagDOH         = "DOH"
 	TagClient      = "Client"
 	TagNetworkTest = "NetTest"
+	TagNetworkTime = "NetTime"
 )
 
 var (
@@ -936,12 +937,20 @@ func (s *Client) GetTime(tm time.Time) (time.Time, error) {
 
 func (s *Client) getTimeSingle(tm time.Time, url string, roots *x509.CertPool) (time.Time, error) {
 
+	tmPtr := &tm
+
 	tlsConfig := &tls.Config{
 		MinVersion:       DefaultTLSMinVersion,
 		CurvePreferences: DefaultCurvePreferences,
 		CipherSuites:     DefaultCipherSuites,
 		RootCAs:          roots,
-		Time:             func() time.Time { return tm },
+		Time: func() time.Time {
+			if Trace {
+				fmt.Printf("%s Using custom time:%v\n", TagNetworkTime, *tmPtr)
+
+			}
+			return *tmPtr
+		},
 	}
 
 	client := &http.Client{
@@ -960,7 +969,7 @@ func (s *Client) getTimeSingle(tm time.Time, url string, roots *x509.CertPool) (
 	for tries := 0; tries < 8; tries++ {
 		request, err := http.NewRequest("GET", url, nil)
 		if err != nil {
-			return tm, err
+			return *tmPtr, err
 		}
 		request.Header.Del("User-Agent") // Do not expose our user-agent/version
 
@@ -968,39 +977,53 @@ func (s *Client) getTimeSingle(tm time.Time, url string, roots *x509.CertPool) (
 		request = request.WithContext(ctx)
 
 		response, err := client.Do(request)
-		if err != nil {
-			cancel()
-			if response != nil && response.Body != nil {
-				response.Body.Close() // Cleanup resources
-			}
-			if ciErr, ok := err.(*x509.CertificateInvalidError); ok {
-				if ciErr.Reason == x509.Expired {
-					if ciErr.Cert != nil && ciErr.Cert.NotBefore.After(tm) {
-						tm = ciErr.Cert.NotBefore.Add(1 * time.Second)
-						continue
-					}
-				}
-			}
-
-			// Whatever error we got, we cannot recover -- so we are done
-			return tm, err
-		}
 		cancel()
-		response.Body.Close()
-
-		// A successful request indicates a time that led to a validated cert
-		// chain...but it may not be current.  Now use the Date header to
-		// find the actual current time.
-
-		tm2 := parseDate(response.Header.Get("Date"))
-		if tm2.IsZero() {
-			return tm, errors.New("Response did not include usuable date")
+		if response != nil && response.Body != nil {
+			response.Body.Close()
 		}
-		tm = tm2
-		break
+
+		if err == nil {
+			// A successful request indicates a time that led to a validated cert
+			// chain...but it may not be current.  Now use the Date header to
+			// find the actual current time.
+
+			if Trace {
+				fmt.Printf("%s Time usable for connection:%v\n", TagNetworkTime, *tmPtr)
+			}
+
+			tm2 := parseDate(response.Header.Get("Date"))
+			if tm2.IsZero() {
+				return *tmPtr, errors.New("Response did not include usuable date")
+			}
+			tmPtr = &tm2
+			if Trace {
+				fmt.Printf("%s Time from server:%v\n", TagNetworkTime, *tmPtr)
+			}
+			break
+		}
+
+		if ciErr, ok := err.(*x509.CertificateInvalidError); ok {
+			if ciErr.Reason == x509.Expired {
+				if ciErr.Cert != nil && tmPtr.Before(ciErr.Cert.NotBefore) {
+					tmTmp := ciErr.Cert.NotBefore.Add(1 * time.Second)
+					tmPtr = &tmTmp
+					continue
+				}
+				if Trace {
+					fmt.Printf("%s Certificate expired error did not include cert\n", TagNetworkTime)
+				}
+			} else if Trace {
+				fmt.Printf("%s Certificate error other than expired: %v\n", TagNetworkTime, err.Error())
+			}
+		} else if Trace {
+			fmt.Printf("%s Non-certificate error: %v\n", TagNetworkTime, err.Error())
+		}
+
+		// Whatever error we got, we cannot recover -- so we are done
+		return *tmPtr, err
 	}
 
-	return tm, nil
+	return *tmPtr, nil
 }
 
 func parseDate(date string) time.Time {
