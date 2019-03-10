@@ -56,8 +56,9 @@ const (
 	contextKeyDOH = "sc_doh"
 	appDNSMessage = "application/dns-message"
 
-	TagDOH    = "DOH"
-	TagClient = "Client"
+	TagDOH         = "DOH"
+	TagClient      = "Client"
+	TagNetworkTest = "NetTest"
 )
 
 var (
@@ -95,6 +96,7 @@ type Client struct {
 	HTTPSPins                 [][]byte
 	NetworkTestHostnames      []string
 	TLSErrorCallback          func(source, errorType string, cert *x509.Certificate)
+	DOHErrorCallback          func(source, hostname string, err error)
 	DateCallback              func(t time.Time)
 	CountDOHCacheHits         uint32
 	CountDOHRequests          uint32
@@ -285,7 +287,7 @@ func New(cfg Config) (*Client, error) {
 
 					// NOTE: net.DialTimeout will use normal DNS to resolve DOH server hostnames:
 					if Trace {
-						fmt.Printf("DOH Dial %s:%s\n", network, dialAddr)
+						fmt.Printf("%s Dial %s:%s\n", TagDOH, network, dialAddr)
 					}
 					return net.DialTimeout(network, dialAddr, doh.Timeout)
 				},
@@ -341,7 +343,7 @@ func New(cfg Config) (*Client, error) {
 		var ip net.IP
 		if ip = net.ParseIP(host); ip != nil {
 			if Trace {
-				fmt.Printf("Client Dial %s:%s\n", network, addr)
+				fmt.Printf("%s Dial %s:%s\n", TagClient, network, addr)
 			}
 			return net.DialTimeout(network, addr, cfg.TimeoutHTTPSSetup)
 		}
@@ -361,7 +363,7 @@ func New(cfg Config) (*Client, error) {
 
 			addr := net.JoinHostPort(ip.String(), port)
 			if Trace {
-				fmt.Printf("Client Dial %s:%s\n", network, addr)
+				fmt.Printf("%s Dial %s:%s\n", TagClient, network, addr)
 			}
 			conn, err = net.DialTimeout(network, addr, cfg.TimeoutHTTPSSetup)
 			if err == nil {
@@ -628,11 +630,15 @@ func (s *Client) TestNetwork() bool {
 
 	for _, hostname := range s.NetworkTestHostnames {
 		if Trace {
-			fmt.Printf("TEST Legacy DNS lookup for %s\n", hostname)
+			fmt.Printf("%s Legacy DNS lookup for %s\n", TagNetworkTest, hostname)
 		}
 		if addrs, err := net.LookupHost(hostname); err == nil && len(addrs) > 0 {
 			// A lookup succeeded; call that good
 			return true
+		} else if err != nil {
+			if s.DOHErrorCallback != nil {
+				s.DOHErrorCallback(TagNetworkTest, hostname, err)
+			}
 		}
 	}
 
@@ -646,7 +652,7 @@ func (s *Client) LookupIP(hostname string) ([]net.IP, error) {
 	var err error
 	var body []byte
 
-	// BUGFIX: if hostname is already an IP address, just return it:
+	// If hostname is already an IP address, just return it:
 	var ip net.IP
 	if ip = net.ParseIP(hostname); ip != nil {
 		ip = ip.To4()
@@ -737,6 +743,11 @@ func (s *Client) LookupIP(hostname string) ([]net.IP, error) {
 					s.TLSErrorCallback(TagDOH, "HostnameInvalid", hnErr.Certificate)
 				}
 			}
+
+			if s.DOHErrorCallback != nil {
+				s.DOHErrorCallback(TagDOH, hostname, err)
+			}
+
 			cancel()
 			continue
 		}
@@ -777,7 +788,7 @@ func (s *Client) LookupIP(hostname string) ([]net.IP, error) {
 	// Did we get a response?
 	if len(responseBody) == 0 {
 		atomic.AddUint32(&s.CountDOHOperationalErrors, 1)
-		return nil, errors.New("No DOH answers")
+		return nil, errors.New(TagDOH + " no answers for " + hostname)
 	}
 
 	// Parse the response (a DNS message)
@@ -790,19 +801,19 @@ func (s *Client) LookupIP(hostname string) ([]net.IP, error) {
 
 	if responseHeader.RCode != dnsmessage.RCodeSuccess {
 		atomic.AddUint32(&s.CountDOHOperationalErrors, 1)
-		return nil, errors.New("DOH lookup returned non-success")
+		return nil, errors.New(TagDOH + " lookup returned non-success")
 	}
 	if !responseHeader.Response {
 		atomic.AddUint32(&s.CountDOHOperationalErrors, 1)
-		return nil, errors.New("DOH response was not marked as response")
+		return nil, errors.New(TagDOH + " response was not marked as response")
 	}
 	if responseHeader.ID != msg.Header.ID {
 		atomic.AddUint32(&s.CountDOHOperationalErrors, 1)
-		return nil, errors.New("DOH lookup returned bad ID")
+		return nil, errors.New(TagDOH + " lookup returned bad ID")
 	}
 	if responseHeader.Truncated {
 		atomic.AddUint32(&s.CountDOHOperationalErrors, 1)
-		return nil, errors.New("DOH response was truncated")
+		return nil, errors.New(TagDOH + " response was truncated")
 	}
 
 	if err = p.SkipAllQuestions(); err != nil {
