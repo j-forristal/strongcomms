@@ -734,11 +734,16 @@ func (s *Client) LookupIP(hostname string) ([]net.IP, error) {
 
 			if s.TLSErrorCallback != nil {
 				// Decipher the error reason; security violations get special treatment
-				if uaErr, ok := err.(x509.UnknownAuthorityError); ok {
+
+				if ue, ok := err.(*url.Error); ok { // BUGFIX: Unwrap any url.Error:
+					err = ue.Err
+				}
+
+				if uaErr, ok := err.(*x509.UnknownAuthorityError); ok {
 					s.TLSErrorCallback(TagDOH, "UnknownAuthority", uaErr.Cert)
-				} else if ciErr, ok := err.(x509.CertificateInvalidError); ok {
+				} else if ciErr, ok := err.(*x509.CertificateInvalidError); ok {
 					s.TLSErrorCallback(TagDOH, "CertificateInvalid", ciErr.Cert)
-				} else if hnErr, ok := err.(x509.HostnameError); ok {
+				} else if hnErr, ok := err.(*x509.HostnameError); ok {
 					s.TLSErrorCallback(TagDOH, "HostnameInvalid", hnErr.Certificate)
 				}
 			}
@@ -900,11 +905,16 @@ func (s *Client) Do(r *http.Request) (*http.Response, error) {
 
 	// Intercept and report certain errors
 	if err != nil && s.TLSErrorCallback != nil {
-		if uaErr, ok := err.(x509.UnknownAuthorityError); ok {
+
+		if ue, ok := err.(*url.Error); ok { // BUGFIX: Unwrap any url.Error:
+			err = ue.Err
+		}
+
+		if uaErr, ok := err.(*x509.UnknownAuthorityError); ok {
 			s.TLSErrorCallback(TagClient, "UnknownAuthority", uaErr.Cert)
-		} else if ciErr, ok := err.(x509.CertificateInvalidError); ok {
+		} else if ciErr, ok := err.(*x509.CertificateInvalidError); ok {
 			s.TLSErrorCallback(TagClient, "CertificateInvalid", ciErr.Cert)
-		} else if hnErr, ok := err.(x509.HostnameError); ok {
+		} else if hnErr, ok := err.(*x509.HostnameError); ok {
 			s.TLSErrorCallback(TagClient, "HostnameInvalid", hnErr.Certificate)
 		} else if err == ErrorTLSPinViolation {
 			s.TLSErrorCallback(TagClient, "PinViolation", nil)
@@ -933,7 +943,7 @@ func (s *Client) GetTime(tm time.Time) (time.Time, error) {
 	return s.getTimeSingle(tm, "https://1.1.1.1/", certPool)
 }
 
-func (s *Client) getTimeSingle(tm time.Time, url string, roots *x509.CertPool) (time.Time, error) {
+func (s *Client) getTimeSingle(tm time.Time, u string, roots *x509.CertPool) (time.Time, error) {
 
 	tmPtr := &tm
 
@@ -964,7 +974,7 @@ func (s *Client) getTimeSingle(tm time.Time, url string, roots *x509.CertPool) (
 	}
 
 	for tries := 0; tries < 8; tries++ {
-		request, err := http.NewRequest("GET", url, nil)
+		request, err := http.NewRequest("GET", u, nil)
 		if err != nil {
 			return *tmPtr, err
 		}
@@ -999,7 +1009,11 @@ func (s *Client) getTimeSingle(tm time.Time, url string, roots *x509.CertPool) (
 			break
 		}
 
-		if ciErr, ok := err.(x509.CertificateInvalidError); ok {
+		if ue, ok := err.(*url.Error); ok { // BUGFIX: Unwrap any url.Error:
+			err = ue.Err
+		}
+
+		if ciErr, ok := err.(*x509.CertificateInvalidError); ok {
 			if ciErr.Reason == x509.Expired {
 				if ciErr.Cert != nil && tmPtr.Before(ciErr.Cert.NotBefore) {
 					tmTmp := ciErr.Cert.NotBefore.Add(1 * time.Second)
