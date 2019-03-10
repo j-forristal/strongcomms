@@ -260,7 +260,7 @@ func New(cfg Config) (*Client, error) {
 			DisableCompression:    false,
 			TLSHandshakeTimeout:   cfg.TimeoutDOH,
 			ResponseHeaderTimeout: cfg.TimeoutDOH,
-			Proxy: proxy,
+			Proxy:                 proxy,
 			TLSClientConfig: &tls.Config{
 				MinVersion:         DefaultTLSMinVersion,
 				CurvePreferences:   DefaultCurvePreferences,
@@ -303,7 +303,7 @@ func New(cfg Config) (*Client, error) {
 			DisableCompression:    false,
 			TLSHandshakeTimeout:   cfg.TimeoutHTTPSSetup,
 			ResponseHeaderTimeout: cfg.TimeoutHTTPSSetup,
-			Proxy: proxy,
+			Proxy:                 proxy,
 			// NOTE: TLSClientConfig set below
 			// NOTE: DialContext set below
 		},
@@ -734,11 +734,11 @@ func (s *Client) LookupIP(hostname string) ([]net.IP, error) {
 
 			if s.TLSErrorCallback != nil {
 				// Decipher the error reason; security violations get special treatment
-				if uaErr, ok := err.(*x509.UnknownAuthorityError); ok {
+				if uaErr, ok := err.(x509.UnknownAuthorityError); ok {
 					s.TLSErrorCallback(TagDOH, "UnknownAuthority", uaErr.Cert)
-				} else if ciErr, ok := err.(*x509.CertificateInvalidError); ok {
+				} else if ciErr, ok := err.(x509.CertificateInvalidError); ok {
 					s.TLSErrorCallback(TagDOH, "CertificateInvalid", ciErr.Cert)
-				} else if hnErr, ok := err.(*x509.HostnameError); ok {
+				} else if hnErr, ok := err.(x509.HostnameError); ok {
 					s.TLSErrorCallback(TagDOH, "HostnameInvalid", hnErr.Certificate)
 				}
 			}
@@ -900,11 +900,11 @@ func (s *Client) Do(r *http.Request) (*http.Response, error) {
 
 	// Intercept and report certain errors
 	if err != nil && s.TLSErrorCallback != nil {
-		if uaErr, ok := err.(*x509.UnknownAuthorityError); ok {
+		if uaErr, ok := err.(x509.UnknownAuthorityError); ok {
 			s.TLSErrorCallback(TagClient, "UnknownAuthority", uaErr.Cert)
-		} else if ciErr, ok := err.(*x509.CertificateInvalidError); ok {
+		} else if ciErr, ok := err.(x509.CertificateInvalidError); ok {
 			s.TLSErrorCallback(TagClient, "CertificateInvalid", ciErr.Cert)
-		} else if hnErr, ok := err.(*x509.HostnameError); ok {
+		} else if hnErr, ok := err.(x509.HostnameError); ok {
 			s.TLSErrorCallback(TagClient, "HostnameInvalid", hnErr.Certificate)
 		} else if err == ErrorTLSPinViolation {
 			s.TLSErrorCallback(TagClient, "PinViolation", nil)
@@ -958,8 +958,8 @@ func (s *Client) getTimeSingle(tm time.Time, url string, roots *x509.CertPool) (
 			DisableCompression:    false,
 			TLSHandshakeTimeout:   DefaultTimeoutHTTPSSetup,
 			ResponseHeaderTimeout: DefaultTimeoutHTTPSTotal,
-			Proxy:           http.ProxyFromEnvironment,
-			TLSClientConfig: tlsConfig,
+			Proxy:                 http.ProxyFromEnvironment,
+			TLSClientConfig:       tlsConfig,
 		},
 	}
 
@@ -999,7 +999,7 @@ func (s *Client) getTimeSingle(tm time.Time, url string, roots *x509.CertPool) (
 			break
 		}
 
-		if ciErr, ok := err.(*x509.CertificateInvalidError); ok {
+		if ciErr, ok := err.(x509.CertificateInvalidError); ok {
 			if ciErr.Reason == x509.Expired {
 				if ciErr.Cert != nil && tmPtr.Before(ciErr.Cert.NotBefore) {
 					tmTmp := ciErr.Cert.NotBefore.Add(1 * time.Second)
@@ -1013,7 +1013,7 @@ func (s *Client) getTimeSingle(tm time.Time, url string, roots *x509.CertPool) (
 				s.TraceCallback(fmt.Sprintf("%s Certificate error other than expired: %v", TagNetworkTime, err.Error()))
 			}
 		} else if s.TraceCallback != nil {
-			s.TraceCallback(fmt.Sprintf("%s Non-certificate error: %v", TagNetworkTime, err.Error()))
+			s.TraceCallback(fmt.Sprintf("%s Non-certificate error %T:%v", TagNetworkTime, err, err.Error()))
 		}
 
 		// Whatever error we got, we cannot recover -- so we are done
