@@ -43,6 +43,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -106,6 +107,7 @@ type Client struct {
 	CountDOHResumed           uint32
 	CountHTTPSResumed         uint32
 	cache                     *lru.Cache
+	l                         sync.Mutex
 }
 
 type DOHServer struct {
@@ -703,9 +705,14 @@ func (s *Client) LookupIP(hostname string) ([]net.IP, error) {
 	if body, err = msg.Pack(); err != nil {
 		return nil, err
 	}
+
+	s.l.Lock()
+	currentServers := s.DOHServers
+	s.l.Unlock()
+
 	var responseBody []byte
 	var dohServer *DOHServer
-	for _, dohServer = range s.DOHServers {
+	for _, dohServer = range currentServers {
 
 		request, err := http.NewRequest("POST", dohServer.Url, bytes.NewBuffer(body))
 		if err != nil {
@@ -882,17 +889,19 @@ func (s *Client) LookupIP(hostname string) ([]net.IP, error) {
 
 	// Since this DOH server gave us a parseable answer, move it to the front
 	// of the line for next time
-	if s.DOHServers[0] != dohServer {
-		currentServers := s.DOHServers
-		newServers := make([]*DOHServer, len(currentServers))
+	if currentServers[0] != dohServer {
+		newServers := make([]*DOHServer, 0, len(currentServers))
 		newServers = append(newServers, dohServer)
-		for _, s := range s.DOHServers {
+		for _, s := range currentServers {
 			if s == dohServer {
 				continue
 			}
 			newServers = append(newServers, s)
 		}
+
+		s.l.Lock()
 		s.DOHServers = newServers
+		s.l.Unlock()
 	}
 
 	return hostIPs, nil
