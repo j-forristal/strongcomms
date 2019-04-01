@@ -940,6 +940,7 @@ func (s *Client) GetTime(tm time.Time) (time.Time, error) {
 	// TODO: use multiple sources and correlate, to avoid a single-source
 	// cert compromise
 
+	tm, _ = s.getTimeSingle(tm, "https://1.0.0.1/", certPool)
 	return s.getTimeSingle(tm, "https://1.1.1.1/", certPool)
 }
 
