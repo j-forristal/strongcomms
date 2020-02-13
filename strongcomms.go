@@ -470,7 +470,7 @@ func New(cfg Config) (*Client, error) {
 	if cfg.UseGoogleDOH {
 		c.DOHServers = append(c.DOHServers, &DOHServer{
 			Timeout: cfg.TimeoutDOH,
-			Url:     "https://dns.google.com/experimental",
+			Url:     "https://dns.google/dns-query",
 			Dial:    "dns.google.com:443",
 		})
 	}
