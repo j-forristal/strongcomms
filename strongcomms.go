@@ -65,8 +65,8 @@ const (
 
 var (
 	DefaultTimeoutDOH          = 30 * time.Second
-	DefaultTimeoutHTTPSTotal   = 15 * time.Minute
-	DefaultTimeoutHTTPSSetup   = 60 * time.Second
+	DefaultTimeoutHTTPSTotal   = 30 * time.Second
+	DefaultTimeoutHTTPSSetup   = 15 * time.Second
 	DefaultMinimumDOHCacheTime = 5 * time.Minute
 	DefaultCacheSize           = 32
 
@@ -471,7 +471,12 @@ func New(cfg Config) (*Client, error) {
 		c.DOHServers = append(c.DOHServers, &DOHServer{
 			Timeout: cfg.TimeoutDOH,
 			Url:     "https://dns.google/dns-query",
-			Dial:    "dns.google.com:443",
+			Dial:    "8.8.8.8:443",
+		})
+		c.DOHServers = append(c.DOHServers, &DOHServer{
+			Timeout: cfg.TimeoutDOH,
+			Url:     "https://dns.google/dns-query",
+			Dial:    "8.8.4.4:443",
 		})
 	}
 
