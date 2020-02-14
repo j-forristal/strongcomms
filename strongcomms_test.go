@@ -6,9 +6,12 @@
 package strongcomms
 
 import (
+	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"testing"
 	"time"
 )
@@ -83,6 +86,15 @@ var (
 	}
 
 	zeroPin = [32]byte{0}
+
+	httpTrace = &httptrace.ClientTrace{
+		DNSDone: func(dnsInfo httptrace.DNSDoneInfo) {
+			fmt.Printf("HttpTrace: DNS Info: %+v\n", dnsInfo)
+		},
+		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
+			fmt.Printf("HttpTrace: TLS Handshake Done: %+v (%v)\n", cs, err)
+		},
+	}
 )
 
 func commonClient(s *Client) {
@@ -283,8 +295,11 @@ func TestGetTimeCurrent(t *testing.T) {
 	}
 	commonClient(client)
 
+	ctx := context.Background()
+	ctx = httptrace.WithClientTrace(ctx, httpTrace)
+
 	tm := time.Now()
-	tm2, err := client.GetTime(tm)
+	tm2, err := client.GetTimeWithContext(tm, ctx)
 	if err != nil {
 		t.Error(err)
 	} else {
@@ -307,8 +322,11 @@ func TestGetTimeZero(t *testing.T) {
 	}
 	commonClient(client)
 
+	ctx := context.Background()
+	ctx = httptrace.WithClientTrace(ctx, httpTrace)
+
 	var tm time.Time
-	tm2, err := client.GetTime(tm)
+	tm2, err := client.GetTimeWithContext(tm, ctx)
 	if err != nil {
 		t.Error(err)
 	} else {

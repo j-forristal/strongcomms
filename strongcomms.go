@@ -66,7 +66,7 @@ const (
 var (
 	DefaultTimeoutNetworkTest  = 5 * time.Second
 	DefaultTimeoutDOH          = 30 * time.Second
-	DefaultTimeoutHTTPSTotal   = 30 * time.Second
+	DefaultTimeoutHTTPSTotal   = 15 * time.Minute
 	DefaultTimeoutHTTPSSetup   = 15 * time.Second
 	DefaultMinimumDOHCacheTime = 5 * time.Minute
 	DefaultCacheSize           = 32
@@ -970,26 +970,32 @@ func (s *Client) Do(r *http.Request) (*http.Response, error) {
 	return resp, err
 }
 
-// Establish the concept of current time using Cloudflare servers.
+// Establish the concept of current time using DOH servers.
 // This is meant for IoT devices with no RTC, that must securely
 // set the time (and prefer to not use NTP). Passed-in time
-// can be zero-time, time.Now(), and is assumed to potentially
+// can be zero-time or time.Now(), and is assumed to potentially
 // be inaccurate (just taken as a starting point).
 func (s *Client) GetTime(tm time.Time) (time.Time, error) {
+	return s.GetTimeWithContext(tm, context.Background())
+}
+
+func (s *Client) GetTimeWithContext(tm time.Time, ctx context.Context) (time.Time, error) {
 
 	certPool := x509.NewCertPool()
-	if !certPool.AppendCertsFromPEM(CertsCloudflare) {
-		return tm, errors.New("Unable to load Cloudflare certs")
+	if !certPool.AppendCertsFromPEM(CertsDOH) {
+		return tm, errors.New("Unable to load DOH certs")
 	}
 
 	// TODO: use multiple sources and correlate, to avoid a single-source
 	// cert compromise
-
-	tm, _ = s.getTimeSingle(tm, "https://1.0.0.1/", certPool)
-	return s.getTimeSingle(tm, "https://1.1.1.1/", certPool)
+	var err error
+	if tm, err = s.getTimeSingle(tm, "https://cloudflare-dns.com/", "1.1.1.1:443", certPool, ctx); err == nil {
+		return tm, nil
+	}
+	return s.getTimeSingle(tm, "https://dns.google/", "8.8.8.8:443", certPool, ctx)
 }
 
-func (s *Client) getTimeSingle(tm time.Time, u string, roots *x509.CertPool) (time.Time, error) {
+func (s *Client) getTimeSingle(tm time.Time, u, hostAddr string, roots *x509.CertPool, ctx context.Context) (time.Time, error) {
 
 	tmPtr := &tm
 
@@ -1007,28 +1013,34 @@ func (s *Client) getTimeSingle(tm time.Time, u string, roots *x509.CertPool) (ti
 	}
 
 	client := &http.Client{
-		Timeout: DefaultTimeoutHTTPSTotal,
+		Timeout: DefaultTimeoutDOH,
 		Transport: &http.Transport{
 			MaxIdleConns:          1,
-			IdleConnTimeout:       DefaultTimeoutHTTPSSetup,
+			IdleConnTimeout:       DefaultTimeoutDOH,
 			DisableCompression:    false,
-			TLSHandshakeTimeout:   DefaultTimeoutHTTPSSetup,
-			ResponseHeaderTimeout: DefaultTimeoutHTTPSTotal,
+			TLSHandshakeTimeout:   DefaultTimeoutDOH,
+			ResponseHeaderTimeout: DefaultTimeoutDOH,
 			Proxy:                 http.ProxyFromEnvironment,
 			TLSClientConfig:       tlsConfig,
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				dialer := net.Dialer{}
+				return dialer.DialContext(ctx, "tcp4", hostAddr)
+			},
 		},
 	}
 
 	for tries := 0; tries < 8; tries++ {
+		// Construct new request
 		request, err := http.NewRequest("GET", u, nil)
 		if err != nil {
 			return *tmPtr, err
 		}
 		request.Header.Del("User-Agent") // Do not expose our user-agent/version
 
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeoutHTTPSTotal)
-		request = request.WithContext(ctx)
+		ctx2, cancel := context.WithTimeout(ctx, DefaultTimeoutDOH)
+		request = request.WithContext(ctx2)
 
+		// Do the actual request
 		response, err := client.Do(request)
 		cancel()
 		if response != nil && response.Body != nil {
@@ -1037,7 +1049,7 @@ func (s *Client) getTimeSingle(tm time.Time, u string, roots *x509.CertPool) (ti
 
 		if err == nil {
 			// A successful request indicates a time that led to a validated cert
-			// chain...but it may not be current.  Now use the Date header to
+			// chain...but it may not be the current time.  Now use the Date header to
 			// find the actual current time.
 
 			if s.TraceCallback != nil {
@@ -1046,13 +1058,12 @@ func (s *Client) getTimeSingle(tm time.Time, u string, roots *x509.CertPool) (ti
 
 			tm2 := parseDate(response.Header.Get("Date"))
 			if tm2.IsZero() {
-				return *tmPtr, errors.New("Response did not include usuable date")
+				return *tmPtr, errors.New("Response did not include usable date")
 			}
-			tmPtr = &tm2
 			if s.TraceCallback != nil {
-				s.TraceCallback(fmt.Sprintf("%s Time from server:%v", TagNetworkTime, *tmPtr))
+				s.TraceCallback(fmt.Sprintf("%s Time from server:%v", TagNetworkTime, tm2))
 			}
-			break
+			return tm2, nil
 		}
 
 		if ue, ok := err.(*url.Error); ok { // BUGFIX: Unwrap any url.Error:
