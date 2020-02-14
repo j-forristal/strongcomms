@@ -453,11 +453,23 @@ func New(cfg Config) (*Client, error) {
 
 	// Now add in pre-made DOH server configurations, if requested
 	if cfg.UseCloudflareDOH {
-		c.DOHServers = append(c.DOHServers, &DOHServer{
-			Timeout: cfg.TimeoutDOH,
-			Url:     "https://cloudflare-dns.com/dns-query",
-			Dial:    "1.1.1.1:443",
-		})
+		/*
+
+			Note: we no longer use 1.1.1.1 due to still-happening misconfigurations
+			in routing encountered on networks like AT&T/MVNOs, etc.  The following URLs
+			are old, but highlight the nature of the problem that is still present
+			(circa 2020, encountered by the author) in select carrier networks.
+
+			https://blog.cloudflare.com/fixing-reachability-to-1-1-1-1-globally/
+			https://arstechnica.com/information-technology/2018/05/att-is-blocking-cloudflares-privacy-focused-dns-calls-it-an-accident/
+
+			c.DOHServers = append(c.DOHServers, &DOHServer{
+				Timeout: cfg.TimeoutDOH,
+				Url:     "https://cloudflare-dns.com/dns-query",
+				Dial:    "1.1.1.1:443",
+			})
+		*/
+
 		c.DOHServers = append(c.DOHServers, &DOHServer{
 			Timeout: cfg.TimeoutDOH,
 			Url:     "https://cloudflare-dns.com/dns-query",
@@ -989,7 +1001,7 @@ func (s *Client) GetTimeWithContext(tm time.Time, ctx context.Context) (time.Tim
 	// TODO: use multiple sources and correlate, to avoid a single-source
 	// cert compromise
 	var err error
-	if tm, err = s.getTimeSingle(tm, "https://cloudflare-dns.com/", "1.1.1.1:443", certPool, ctx); err == nil {
+	if tm, err = s.getTimeSingle(tm, "https://cloudflare-dns.com/", "1.0.0.1:443", certPool, ctx); err == nil {
 		return tm, nil
 	}
 	return s.getTimeSingle(tm, "https://dns.google/", "8.8.8.8:443", certPool, ctx)
