@@ -326,6 +326,11 @@ func TestGetTimeZero(t *testing.T) {
 	ctx = httptrace.WithClientTrace(ctx, httpTrace)
 
 	var tm time.Time
+	// BUGFIX: x509.isValid() in the runtime tests the provided time,
+	// and if zero, internally swaps to using time.Now(), which is
+	// undermining this test. So we have to mildly increase pass zero.
+	tm = tm.Add(time.Hour * 24)
+
 	tm2, err := client.GetTimeWithContext(tm, ctx)
 	if err != nil {
 		t.Error(err)
