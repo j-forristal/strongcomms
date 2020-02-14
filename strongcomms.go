@@ -64,13 +64,12 @@ const (
 )
 
 var (
+	DefaultTimeoutNetworkTest  = 5 * time.Second
 	DefaultTimeoutDOH          = 30 * time.Second
 	DefaultTimeoutHTTPSTotal   = 30 * time.Second
 	DefaultTimeoutHTTPSSetup   = 15 * time.Second
 	DefaultMinimumDOHCacheTime = 5 * time.Minute
 	DefaultCacheSize           = 32
-
-	DefaultNetworkTestHostnames = []string{"dns.google.com", "cloudflare-dns.com"}
 
 	DefaultTLSMinVersion    = uint16(tls.VersionTLS12)
 	DefaultCurvePreferences = []tls.CurveID{
@@ -94,7 +93,6 @@ type Client struct {
 	DOHServers                []*DOHServer
 	ClientHTTPS               *http.Client
 	HTTPSPins                 [][]byte
-	NetworkTestHostnames      []string
 	TLSErrorCallback          func(source, errorType string, cert *x509.Certificate)
 	DOHErrorCallback          func(source, hostname string, err error)
 	DateCallback              func(t time.Time)
@@ -311,7 +309,6 @@ func New(cfg Config) (*Client, error) {
 		},
 	}
 
-	c.NetworkTestHostnames = DefaultNetworkTestHostnames
 	c.cache = lru.New(DefaultCacheSize)
 
 	// SPECIAL NOTE: We are going to install a custom Dialer, which uses our DOH client for DNS lookups
@@ -628,28 +625,62 @@ func (s *Client) SetCache(hostname string, ips []net.IP) {
 	}
 }
 
-// Utility function to 'test' the network using the NetworkTestHostnames. Currently
-// 'test' means to do a simple (traditional) DNS lookup, which is a good sign
-// things are generally working -- but those DNS lookups must not be privacy
-// revealing (so, choose NetworkTestHostnames carefully!).
+// Legacy function that simply calls TestNetworkWithContext() using a calculated
+// timeout of DefaultTimeoutDOH * the number of configured DOH servers.
 func (s *Client) TestNetwork() bool {
+	if len(s.DOHServers) == 0 {
+		return false
+	}
+	timeout := DefaultTimeoutDOH * time.Duration(len(s.DOHServers))
 
-	for _, hostname := range s.NetworkTestHostnames {
-		if s.TraceCallback != nil {
-			s.TraceCallback(fmt.Sprintf("%s Legacy DNS lookup for %s", TagNetworkTest, hostname))
-		}
-		if addrs, err := net.LookupHost(hostname); err == nil && len(addrs) > 0 {
-			// A lookup succeeded; call that good
-			return true
-		} else if err != nil {
-			if s.DOHErrorCallback != nil {
-				s.DOHErrorCallback(TagNetworkTest, hostname, err)
-			}
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	return s.TestNetworkWithContext(ctx)
+}
+
+// Utility function to 'test' the network by attempting a TCP connection (IPv4) to
+// the configured DOH server(s). This function will internally keep trying until
+// either a successful connection is made, or the given context triggers a timeout,
+// deadline, or cancel.
+func (s *Client) TestNetworkWithContext(ctx context.Context) bool {
+
+	if len(s.DOHServers) == 0 {
+		return false
 	}
 
-	// Nothing resolved
-	return false
+	// We need a new dialer for DialContext use
+	dialer := net.Dialer{
+		Timeout:       DefaultTimeoutNetworkTest,
+		FallbackDelay: -1,
+	}
+
+	// Run until success or context timeout/deadline/cancel occurs
+	for {
+		for _, dohServer := range s.DOHServers {
+			if s.TraceCallback != nil {
+				s.TraceCallback(fmt.Sprintf("%s Attempting TCP test connection to %s", TagNetworkTest, dohServer.Dial))
+			}
+
+			conn, err := dialer.DialContext(ctx, "tcp4", dohServer.Dial)
+			if err == nil {
+				// Connected, network is good
+				conn.Close()
+				return true
+			}
+
+			if err == context.Canceled || err == context.DeadlineExceeded {
+				// Context says we are done
+				if s.TraceCallback != nil {
+					s.TraceCallback(fmt.Sprintf("%s Context cancelled/timed out", TagNetworkTest))
+				}
+				return false
+			}
+
+			// Swallow all other errors and try next one
+			// Loop...
+		}
+	}
 }
 
 // Lookup up IP addresses (A records/IPv4) for the given hostname.  Meant to be
@@ -1033,8 +1064,12 @@ func (s *Client) getTimeSingle(tm time.Time, u string, roots *x509.CertPool) (ti
 				if ciErr.Cert != nil && tmPtr.Before(ciErr.Cert.NotBefore) {
 					tmTmp := ciErr.Cert.NotBefore.Add(1 * time.Second)
 					tmPtr = &tmTmp
+					if s.TraceCallback != nil {
+						s.TraceCallback(fmt.Sprintf("%s Using certificate not-before time:%v", TagNetworkTime, tmTmp))
+					}
 					continue
 				}
+
 				if s.TraceCallback != nil {
 					s.TraceCallback(fmt.Sprintf("%s Certificate expired error did not include cert", TagNetworkTime))
 				}
