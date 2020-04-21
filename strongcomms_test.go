@@ -1,5 +1,5 @@
 /*
-** Copyright (c) 2018 J Forristal LLC
+** Copyright (c) 2020 J Forristal LLC
 ** All Rights Reserved.
  */
 
@@ -339,6 +339,45 @@ func TestGetTimeZero(t *testing.T) {
 			t.Error("Zero time returned")
 		} else {
 			//fmt.Printf("Time: %v\n", tm2)
+		}
+	}
+}
+
+func TestHTTPSClientAmazonRoots(t *testing.T) {
+
+	cfg := Config{
+		UseCloudflareDOH:   true,
+		UseGoogleDOH:       true,
+		CertValidationType: CertValidationCloudfront,
+	}
+
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commonClient(client)
+
+	// Test URLs taken from https://aws.amazon.com/blogs/security/how-to-prepare-for-aws-move-to-its-own-certificate-authority/
+	urls := []string{
+		"https://good.sca1a.amazontrust.com/",
+		"https://good.sca2a.amazontrust.com/",
+		"https://good.sca3a.amazontrust.com/",
+		"https://good.sca4a.amazontrust.com/",
+		"https://good.sca0a.amazontrust.com/",
+	}
+
+	for _, u := range urls {
+		req, err := http.NewRequest("GET", u, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != 200 {
+			t.Error("Amazon HTTPS test response not 200")
 		}
 	}
 }

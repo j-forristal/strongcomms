@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2019, Jeff Forristal, J Forristal LLC
+Copyright (c) 2020, Jeff Forristal, J Forristal LLC
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without

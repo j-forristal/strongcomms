@@ -1,5 +1,7 @@
+// +build !noproxy
+
 /*
-** Copyright (c) 2019 J Forristal LLC
+** Copyright (c) 2020 J Forristal LLC
 ** All Rights Reserved.
  */
 
