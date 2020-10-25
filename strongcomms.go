@@ -103,7 +103,10 @@ type Client struct {
 	CountDOHNoAnswers         uint32
 	CountDOHOk                uint32
 	CountDOHResumed           uint32
-	CountHTTPSResumed         uint32
+	CountClientResumed        uint32
+	CountClientRequests       uint32
+	CountClientOk             uint32
+	CountClientErrors         uint32
 	cache                     *lru.Cache
 	l                         sync.Mutex
 }
@@ -1028,7 +1031,12 @@ func (s *Client) LookupIP(hostname string) ([]net.IP, error) {
 // Perform an HTTP(S) request, similar to http.Client.Do().
 func (s *Client) Do(r *http.Request) (*http.Response, error) {
 
+	atomic.AddUint32(&s.CountClientRequests, 1)
 	resp, err := s.ClientHTTPS.Do(r)
+
+	if resp.TLS != nil && resp.TLS.DidResume {
+		atomic.AddUint32(&s.CountClientResumed, 1)
+	}
 
 	// Intercept and report certain errors
 	if err != nil && s.TLSErrorCallback != nil {
@@ -1050,7 +1058,10 @@ func (s *Client) Do(r *http.Request) (*http.Response, error) {
 
 	// Otherwise pass through
 	if err != nil {
+		atomic.AddUint32(&s.CountClientErrors, 1)
 		err = fmt.Errorf("[host=%s]: %w", r.URL.Host, err)
+	} else {
+		atomic.AddUint32(&s.CountClientOk, 1)
 	}
 	return resp, err
 }
