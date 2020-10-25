@@ -47,7 +47,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/j-forristal/strongcomms/lru"
+	"github.com/golang/groupcache/lru"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
