@@ -107,6 +107,7 @@ func commonClient(s *Client) {
 func TestStaticLookup(t *testing.T) {
 	cfg := Config{
 		UseGoogleDOH:     true,
+		UseQuad9DOH:      true,
 		UseCloudflareDOH: true,
 	}
 	client, err := New(cfg)
@@ -159,9 +160,23 @@ func TestDOHCloudflare(t *testing.T) {
 	testDOHCommon(t, client)
 }
 
+func TestDOHQuad9(t *testing.T) {
+	cfg := Config{
+		UseQuad9DOH: true,
+	}
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commonClient(client)
+
+	testDOHCommon(t, client)
+}
+
 func TestDOHCaching(t *testing.T) {
 	cfg := Config{
 		UseCloudflareDOH: true,
+		UseQuad9DOH:      true,
 	}
 	client, err := New(cfg)
 	if err != nil {
@@ -228,6 +243,7 @@ func TestHTTPSClientGoogleDefault(t *testing.T) {
 	cfg := Config{
 		UseCloudflareDOH: true,
 		UseGoogleDOH:     true,
+		UseQuad9DOH:      true,
 	}
 
 	_ = testHTTPSClientGoogle(cfg, t)
@@ -240,6 +256,7 @@ func TestHTTPSClientGooglePinned(t *testing.T) {
 
 	cfg := Config{
 		UseCloudflareDOH:   true,
+		UseQuad9DOH:        true,
 		UseGoogleDOH:       true,
 		CertValidationType: CertValidateSPKIPinAnyDefault,
 		CertValidationPins: pins,
@@ -261,6 +278,7 @@ func TestHTTPSClientGooglePinned2(t *testing.T) {
 	cfg := Config{
 		UseCloudflareDOH:   true,
 		UseGoogleDOH:       true,
+		UseQuad9DOH:        true,
 		CertValidationType: CertValidateSPKIPinAnyDefault,
 		CertValidationPins: pins,
 	}
@@ -272,6 +290,7 @@ func TestNetworkTest(t *testing.T) {
 	cfg := Config{
 		UseCloudflareDOH: true,
 		UseGoogleDOH:     true,
+		UseQuad9DOH:      true,
 	}
 	client, err := New(cfg)
 	if err != nil {
@@ -288,6 +307,7 @@ func TestGetTimeCurrent(t *testing.T) {
 	cfg := Config{
 		UseCloudflareDOH: true,
 		UseGoogleDOH:     true,
+		UseQuad9DOH:      true,
 	}
 	client, err := New(cfg)
 	if err != nil {
@@ -315,6 +335,7 @@ func TestGetTimeZero(t *testing.T) {
 	cfg := Config{
 		UseCloudflareDOH: true,
 		UseGoogleDOH:     true,
+		UseQuad9DOH:      true,
 	}
 	client, err := New(cfg)
 	if err != nil {
@@ -348,6 +369,7 @@ func TestHTTPSClientAmazonRoots(t *testing.T) {
 	cfg := Config{
 		UseCloudflareDOH:   true,
 		UseGoogleDOH:       true,
+		UseQuad9DOH:        true,
 		CertValidationType: CertValidationCloudfront,
 	}
 
