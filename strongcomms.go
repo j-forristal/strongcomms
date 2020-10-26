@@ -1034,7 +1034,7 @@ func (s *Client) Do(r *http.Request) (*http.Response, error) {
 	atomic.AddUint32(&s.CountClientRequests, 1)
 	resp, err := s.ClientHTTPS.Do(r)
 
-	if resp.TLS != nil && resp.TLS.DidResume {
+	if resp != nil && resp.TLS != nil && resp.TLS.DidResume {
 		atomic.AddUint32(&s.CountClientResumed, 1)
 	}
 
